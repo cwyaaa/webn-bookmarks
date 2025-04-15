@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>网络收藏夹 - 打卡系统</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js"></script>
+</head>
+<body class="bg-gray-100 p-6">
+  <div class="max-w-4xl mx-auto bg-white rounded-2xl shadow p-6">
+    <h1 class="text-2xl font-bold mb-4">📌 网络收藏夹</h1>
+
+    <div class="flex gap-4 mb-4">
+      <button onclick="signUp()" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">注册</button>
+      <button onclick="signIn()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">登录</button>
+      <button onclick="signOut()" class="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500">登出</button>
+    </div>
+
+    <div class="flex flex-col md:flex-row gap-4 mb-4">
+      <input id="bookmarkName" type="text" placeholder="名称" class="flex-1 px-4 py-2 border rounded" />
+      <input id="bookmarkURL" type="url" placeholder="网址，如：https://..." class="flex-1 px-4 py-2 border rounded" />
+      <input id="bookmarkTags" placeholder="标签，用逗号分隔" class="flex-1 px-4 py-2 border rounded" />
+      <button onclick="saveBookmark()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">保存</button>
+    </div>
+
+    <input id="searchBox" type="text" placeholder="🔍 搜索名称或标签" class="w-full px-3 py-2 border mb-4 rounded" oninput="renderFilteredBookmarks(this.value)" />
+    <div id="categoryTabs" class="flex gap-2 mb-4 overflow-x-auto text-sm"></div>
+    <div id="bookmarkList" class="space-y-4"></div>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBTkLZxOypQwmzeLnihgyAxrczNLgq-J6I",
+      authDomain: "webn-25f57.firebaseapp.com",
+      projectId: "webn-25f57",
+      storageBucket: "webn-25f57.firebasestorage.app",
+      messagingSenderId: "472156580131",
+      appId: "1:472156580131:web:3a42f16d8b450149a20496",
+      measurementId: "G-E5E4TBGL5D"
+    };
+
+    const app = firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    let currentUser = null;
+    let bookmarks = [];
+    let categories = {};
+
+    function signUp() {
+      const email = prompt("请输入邮箱");
+      const password = prompt("请输入密码");
+      auth.createUserWithEmailAndPassword(email, password)
+        .then(() => alert("注册成功！"))
+        .catch(error => alert(error.message));
+    }
+
+    function signIn() {
+      const email = prompt("请输入邮箱");
+      const password = prompt("请输入密码");
+      auth.signInWithEmailAndPassword(email, password)
+        .then(() => alert("登录成功！"))
+        .catch(error => alert(error.message));
+    }
+
+    function signOut() {
+      auth.signOut().then(() => {
+        currentUser = null;
+        bookmarks = [];
+        categories = {};
+        renderBookmarks();
+        renderCategories();
+        alert("已登出");
+      });
+    }
+
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        currentUser = user;
+        loadBookmarks();
+      }
+    });
+
+    const categorize = (url) => {
+      if (url.includes("youtube") || url.includes("bilibili")) return "视频";
+      if (url.includes("zhihu") || url.includes("medium") || url.includes("wikipedia")) return "学习";
+      if (url.includes("weibo") || url.includes("twitter") || url.includes("facebook")) return "社交";
+      if (url.includes("chat.openai")) return "AI 工具";
+      return "其他";
+    };
+
+    function saveBookmark() {
+      if (!currentUser) return alert("请先登录！");
+      const name = document.getElementById("bookmarkName").value.trim();
+      const url = document.getElementById("bookmarkURL").value.trim();
+      const tagsInput = document.getElementById("bookmarkTags").value.trim();
+      const tags = tagsInput ? tagsInput.split(",").map(t => t.trim()) : [];
+      if (!name || !url) return alert("请输入名称和网址");
+
+      const category = categorize(url);
+      const bookmark = { name, url, tags, category, createdAt: new Date().toISOString() };
+
+      db.collection("bookmarks").doc(currentUser.uid).collection("items").add(bookmark)
+        .then(() => {
+          alert("书签已保存");
+          loadBookmarks();
+        })
+        .catch(error => alert(error.message));
+
+      document.getElementById("bookmarkName").value = '';
+      document.getElementById("bookmarkURL").value = '';
+      document.getElementById("bookmarkTags").value = '';
+    }
+
+    function loadBookmarks() {
+      if (!currentUser) return;
+      db.collection("bookmarks").doc(currentUser.uid).collection("items").get()
+        .then(snapshot => {
+          bookmarks = [];
+          categories = {};
+          snapshot.forEach(doc => {
+            const data = doc.data();
+            data.id = doc.id;
+            bookmarks.push(data);
+            if (!categories[data.category]) categories[data.category] = [];
+            categories[data.category].push(data);
+          });
+          renderCategories();
+          renderBookmarks();
+        })
+        .catch(error => alert(error.message));
+    }
+
+    function renderCategories() {
+      const tabs = document.getElementById("categoryTabs");
+      tabs.innerHTML = "";
+      Object.keys(categories).forEach(cat => {
+        const btn = document.createElement("button");
+        btn.innerText = cat;
+        btn.className = "px-3 py-1 rounded bg-gray-200 hover:bg-gray-300";
+        btn.onclick = () => renderBookmarks(cat);
+        tabs.appendChild(btn);
+      });
+    }
+
+    function renderFilteredBookmarks(query) {
+      const list = document.getElementById("bookmarkList");
+      list.innerHTML = "";
+      const result = bookmarks.filter(b =>
+        b.name.includes(query) ||
+        b.url.includes(query) ||
+        (b.tags && b.tags.some(tag => tag.includes(query)))
+      );
+      if (result.length === 0) {
+        list.innerHTML = "<p class='text-gray-400'>没有匹配的收藏</p>";
+        return;
+      }
+      result.forEach(b => renderBookmarkCard(b, list));
+    }
+
+    function renderBookmarks(category = null) {
+      const list = document.getElementById("bookmarkList");
+      list.innerHTML = "";
+      const items = category ? categories[category] : bookmarks;
+      if (!items.length) {
+        list.innerHTML = "<p class='text-gray-500'>暂无收藏</p>";
+        return;
+      }
+      items.forEach(b => renderBookmarkCard(b, list));
+    }
+
+    function renderBookmarkCard(b, container) {
+      const card = document.createElement("div");
+      card.className = "bookmark-card p-4 border rounded shadow-sm bg-white flex justify-between items-center";
+      card.dataset.url = b.url;
+
+      const info = document.createElement("div");
+      info.innerHTML = `<div class="font-semibold">${b.name}</div>
+                        <div class="text-sm text-gray-500">${b.url}</div>
+                        <div class="text-xs text-gray-400">标签: ${b.tags?.join(', ') || '无'}</div>`;
+
+      const visitBtn = document.createElement("a");
+      visitBtn.href = b.url;
+      visitBtn.target = "_blank";
+      visitBtn.innerText = "访问";
+      visitBtn.className = "bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600";
+
+      card.appendChild(info);
+      card.appendChild(visitBtn);
+      container.appendChild(card);
+    }
+  </script>
+</body>
+</html>
